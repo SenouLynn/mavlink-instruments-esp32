@@ -1,0 +1,7 @@
+{
+  "name": "hud-core",
+  "version": "0.1.0",
+  "description": "Portable telemetry, trajectory, and Unified HUD scene logic",
+  "build": { "includeDir": "include", "srcDir": "src" }
+}
+
