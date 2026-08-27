@@ -21,7 +21,8 @@ reference; `lib/hud-core` is its framework-free C++ port.
 2. Follow [the wiring diagram](docs/wiring.md), then read [the bring-up runbook](docs/bring-up.md).
    Confirm the exact board labels and display
    breakout pin labels before applying power.
-3. Edit only [hardware_config.hpp](include/hardware_config.hpp) for pin or panel differences.
+3. Confirm the chip marking is `ESP32-S3FH4R2`. Edit [hardware_config.hpp](include/hardware_config.hpp)
+   for pin or panel differences; use a different board definition for a different memory variant.
 4. Install the VS Code PlatformIO extension, then use **PlatformIO: Upload and Monitor**, or run:
 
    ```bash
@@ -53,10 +54,15 @@ warning and cannot change vehicle state.
 
 ## Current assumptions
 
-- Generic ESP32-S3 board compatible with PlatformIO's `esp32-s3-devkitc-1` target.
+- ESP32-S3 SuperMini using an ESP32-S3FH4R2 (4 MB flash and 2 MB QSPI PSRAM).
 - ST7789V SPI breakout with a 240x320 portrait canvas.
 - 3.3 V UART logic and a common ground with the flight controller.
 - MAVLink 1 or 2 byte stream at 115200 baud.
+
+The project-local `boards/esp32-s3-supermini.json` definition enables native USB CDC and QSPI
+PSRAM and selects a partition table that fits 4 MB flash. SuperMini boards are sold by multiple
+vendors; do not flash this environment onto a differently marked memory variant without updating
+the board definition.
 
 The confirmed screen geometry is a rectangular 240x320 portrait canvas. The ST7789 is
 initialized at its native 240x320 dimensions with rotation `0`.

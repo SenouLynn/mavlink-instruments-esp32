@@ -5,7 +5,9 @@ controller.
 
 ## 1. Identify the exact boards
 
-Write down the ESP32-S3 board model and every label on the display connector. A typical SPI
+Confirm the processor marking is `ESP32-S3FH4R2`; that is the 4 MB flash/2 MB QSPI-PSRAM target
+described by `boards/esp32-s3-supermini.json`. Stop and create a matching board definition if the
+marking differs. Write down every label on the display connector. A typical SPI
 display exposes `GND`, `VCC`, `SCL/SCK/CLK`, `SDA/MOSI/DIN`, `RES/RST`, `DC`, `CS`, and `BL/LED`.
 `SDA` on these modules often means SPI MOSI, not I2C SDA. This firmware does not use MISO.
 
@@ -27,7 +29,7 @@ Power everything off and unplug USB before changing wiring.
 | RES / RST | GPIO 8 | `HUD_TFT_RST_PIN` |
 | BL / LED | 3V3 for initial bring-up | `HUD_TFT_BL_PIN = -1` |
 
-These are locked assignments for an ESP32-S3-DevKitC-1-compatible header. Match printed GPIO
+These are locked assignments for the ESP32-S3 SuperMini. Match printed GPIO
 labels, not a wire's position in a photograph. The initial setup keeps the backlight off a GPIO:
 connect BL to 3V3 only when the breakout documentation confirms that BL accepts 3.3 V and
 includes the necessary current limiting. A raw LED backlight requires its specified resistor or
@@ -50,8 +52,10 @@ pio run --target upload
 pio device monitor --baud 115200
 ```
 
-Expected monitor output begins with `Unified HUD booting`, reports a 240x320 display, and says
-whether the framebuffer was allocated. The screen should immediately animate in demo mode.
+Expected monitor output begins with `Unified HUD booting`, reports a 240x320 display, approximately
+2 MB total PSRAM, and `framebuffer=yes`. The screen should immediately animate in demo mode.
+`PSRAM/FRAMEBUFFER STARTUP FAILURE` is a hard configuration or memory fault, not a supported
+low-performance mode.
 
 If upload cannot find the board, hold **BOOT**, tap **RESET**, start upload, and release **BOOT**
 when writing begins. Exact bootloader behavior varies by board.
@@ -73,7 +77,7 @@ Common corrections are isolated in `include/hardware_config.hpp`:
 - portrait or upside down: try rotations `0` through `3`;
 - cropped or offset: correct native width/height for the exact panel variant;
 - random pixels/resets: reduce `HUD_TFT_SPI_HZ` from 40 MHz to 20 MHz and shorten wires;
-- visible flicker with `framebuffer=no`: use a PSRAM board or free memory before rendering.
+- `PSRAM/FRAMEBUFFER STARTUP FAILURE`: verify the FH4R2 marking and QSPI-PSRAM board definition.
 
 ## 5. Add receive-only flight-controller telemetry
 
@@ -119,13 +123,16 @@ Power the propeller-free vehicle and watch the USB serial monitor. The first val
 changes `mode=demo` to `mode=live`. Every two seconds the monitor reports:
 
 ```text
-mode=live mavlink_messages=... parse_errors=... age_ms=... heap=...
+mode=live sysid=1 mavlink_messages=... parse_errors=... uart_errors=0 age_ms=...
+heap=... largest=... psram_free=... render_max_us=...
 ```
 
 Acceptance checks:
 
 - `mavlink_messages` rises continuously;
 - `parse_errors` stays at zero or does not continually rise;
+- `uart_errors` remains zero under sustained traffic;
+- `render_max_us` remains below the 50,000 us frame period at 20 Hz;
 - `age_ms` stays well below 1500;
 - tilting the unarmed controller moves pitch/roll in the expected direction;
 - rotating it changes the heading readout;

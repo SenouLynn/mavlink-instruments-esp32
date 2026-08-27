@@ -20,6 +20,10 @@ float clamp(float value, float low, float high) {
   return std::min(high, std::max(low, value));
 }
 
+float finite_or_zero(const std::optional<float>& value) {
+  return value && std::isfinite(*value) ? *value : 0.0F;
+}
+
 Point rotate(Point point, float degrees, float center_x, float center_y) {
   const float radians = degrees * kPi / 180.0F;
   const float cosine = std::cos(radians);
@@ -171,10 +175,10 @@ void draw_vario(DrawTarget& target, float vertical_rate, float width, float heig
 void compose_unified_hud(const TelemetrySample& sample, DrawTarget& target,
                          const SceneConfig& config) {
   target.clear(kBlack);
-  const float roll_deg = sample.attitude && sample.attitude->roll_rad
-      ? *sample.attitude->roll_rad * kRadToDeg : 0.0F;
-  const float pitch_deg = sample.attitude && sample.attitude->pitch_rad
-      ? *sample.attitude->pitch_rad * kRadToDeg : 0.0F;
+  const float roll_deg = sample.attitude
+      ? finite_or_zero(sample.attitude->roll_rad) * kRadToDeg : 0.0F;
+  const float pitch_deg = sample.attitude
+      ? finite_or_zero(sample.attitude->pitch_rad) * kRadToDeg : 0.0F;
   const TrajectoryResolution trajectory = resolve_trajectory(sample, config.trajectory);
 
   draw_world(target, config.width, config.height, roll_deg, pitch_deg);

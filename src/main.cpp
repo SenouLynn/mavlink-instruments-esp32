@@ -3,8 +3,13 @@
 #include <Adafruit_ST7789.h>
 #include <MAVLink_ardupilotmega.h>
 #include <SPI.h>
+#include <esp_heap_caps.h>
+#include <esp32-hal-psram.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <new>
 
@@ -13,9 +18,42 @@
 
 namespace {
 
+constexpr int kAssignedPins[] = {HUD_TFT_SCLK_PIN, HUD_TFT_MOSI_PIN, HUD_TFT_CS_PIN,
+                                 HUD_TFT_DC_PIN, HUD_TFT_RST_PIN, HUD_MAVLINK_RX_PIN};
+
+constexpr bool assigned_pins_are_unique() {
+  for (std::size_t left = 0; left < sizeof(kAssignedPins) / sizeof(kAssignedPins[0]); ++left) {
+    for (std::size_t right = left + 1; right < sizeof(kAssignedPins) / sizeof(kAssignedPins[0]);
+         ++right) {
+      if (kAssignedPins[left] == kAssignedPins[right]) return false;
+    }
+  }
+  return true;
+}
+
+static_assert(assigned_pins_are_unique(), "Display and MAVLink GPIO assignments must be unique");
+static_assert(HUD_FRAME_RATE_HZ > 0U && HUD_FRAME_RATE_HZ <= 1000U,
+              "Frame rate must produce a nonzero millisecond period");
+static_assert(HUD_MAVLINK_RX_BUFFER_BYTES >= 512U,
+              "MAVLink RX buffer must cover a blocking full-frame SPI transfer");
+#if !HUD_USE_FRAMEBUFFER
+#error "The SuperMini target requires the deterministic PSRAM framebuffer"
+#endif
+
 SPIClass display_spi(FSPI);
 Adafruit_ST7789 display(&display_spi, HUD_TFT_CS_PIN, HUD_TFT_DC_PIN, HUD_TFT_RST_PIN);
 std::unique_ptr<GFXcanvas16> framebuffer;
+
+class PsramCanvas16 final : public GFXcanvas16 {
+ public:
+  PsramCanvas16(std::uint16_t width, std::uint16_t height)
+      : GFXcanvas16(width, height, false) {
+    const std::size_t bytes = static_cast<std::size_t>(width) * height * sizeof(std::uint16_t);
+    buffer = static_cast<std::uint16_t*>(ps_malloc(bytes));
+    buffer_owned = buffer != nullptr;
+    if (buffer) std::memset(buffer, 0, bytes);
+  }
+};
 
 class GfxTarget final : public hud::DrawTarget {
  public:
@@ -62,14 +100,36 @@ hud::TelemetrySample telemetry;
 std::uint32_t last_message_ms = 0;
 std::uint32_t message_count = 0;
 std::uint32_t parse_error_count = 0;
+std::uint8_t active_system_id = 0;
+std::atomic<std::uint32_t> uart_error_count{0};
+std::uint32_t maximum_render_us = 0;
 mavlink_status_t parser_status{};
 bool demo_enabled = true;
+bool display_ready = false;
 
 bool fresh(std::uint32_t now, std::uint32_t received) {
   return received != 0U && now - received <= HUD_TELEMETRY_STALE_MS;
 }
 
-void accept_message(const mavlink_message_t& message, std::uint32_t now) {
+bool accept_message(const mavlink_message_t& message, std::uint32_t now) {
+  if (active_system_id != 0U && message.sysid != active_system_id) return false;
+
+  if (message.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
+    mavlink_heartbeat_t heartbeat{};
+    mavlink_msg_heartbeat_decode(&message, &heartbeat);
+    if (heartbeat.autopilot == MAV_AUTOPILOT_INVALID) return false;
+    if (active_system_id == 0U) active_system_id = message.sysid;
+    last_message_ms = now;
+    ++message_count;
+    return true;
+  }
+
+  const bool is_hud_data = message.msgid == MAVLINK_MSG_ID_ATTITUDE ||
+                           message.msgid == MAVLINK_MSG_ID_VFR_HUD ||
+                           message.msgid == MAVLINK_MSG_ID_GLOBAL_POSITION_INT ||
+                           message.msgid == MAVLINK_MSG_ID_GPS_RAW_INT;
+  if (!is_hud_data) return false;
+  if (active_system_id == 0U) active_system_id = message.sysid;
   last_message_ms = now;
   ++message_count;
   switch (message.msgid) {
@@ -109,6 +169,7 @@ void accept_message(const mavlink_message_t& message, std::uint32_t now) {
     default:
       break;
   }
+  return true;
 }
 
 void read_mavlink() {
@@ -116,8 +177,7 @@ void read_mavlink() {
   while (Serial1.available() > 0) {
     const std::uint8_t byte = static_cast<std::uint8_t>(Serial1.read());
     if (mavlink_parse_char(MAVLINK_COMM_0, byte, &message, &parser_status)) {
-      accept_message(message, millis());
-      demo_enabled = false;
+      if (accept_message(message, millis())) demo_enabled = false;
     }
   }
   parse_error_count = parser_status.parse_error;
@@ -153,17 +213,16 @@ hud::TelemetrySample demo_snapshot(std::uint32_t now) {
 }
 
 void render(const hud::TelemetrySample& sample) {
+  if (!display_ready) return;
+  const std::uint32_t started_us = micros();
   hud::SceneConfig config;
   config.width = display.width();
   config.height = display.height();
-  if (framebuffer && framebuffer->getBuffer()) {
-    GfxTarget target(*framebuffer);
-    hud::compose_unified_hud(sample, target, config);
-    display.drawRGBBitmap(0, 0, framebuffer->getBuffer(), display.width(), display.height());
-  } else {
-    GfxTarget target(display);
-    hud::compose_unified_hud(sample, target, config);
-  }
+  GfxTarget target(*framebuffer);
+  hud::compose_unified_hud(sample, target, config);
+  display.drawRGBBitmap(0, 0, framebuffer->getBuffer(), display.width(), display.height());
+  const std::uint32_t elapsed_us = static_cast<std::uint32_t>(micros() - started_us);
+  maximum_render_us = std::max(maximum_render_us, elapsed_us);
 }
 
 }  // namespace
@@ -184,12 +243,24 @@ void setup() {
   display.fillScreen(hud::kBlack);
 
 #if HUD_USE_FRAMEBUFFER
-  framebuffer.reset(new (std::nothrow) GFXcanvas16(display.width(), display.height()));
+  if (psramFound()) {
+    framebuffer.reset(new (std::nothrow) PsramCanvas16(display.width(), display.height()));
+  }
 #endif
-  Serial.printf("Display %dx%d, framebuffer=%s\n", display.width(), display.height(),
-                framebuffer && framebuffer->getBuffer() ? "yes" : "no (direct fallback)");
+  display_ready = framebuffer && framebuffer->getBuffer();
+  Serial.printf("Display %dx%d, PSRAM=%u/%u, framebuffer=%s\n", display.width(), display.height(),
+                ESP.getFreePsram(), ESP.getPsramSize(), display_ready ? "yes" : "FAILED");
+  if (!display_ready) {
+    display.setTextColor(hud::kHudRed);
+    display.setTextSize(2);
+    display.setCursor(8, 8);
+    display.println("PSRAM/FRAMEBUFFER");
+    display.println("STARTUP FAILURE");
+  }
 
+  Serial1.setRxBufferSize(HUD_MAVLINK_RX_BUFFER_BYTES);
   Serial1.begin(HUD_MAVLINK_BAUD, SERIAL_8N1, HUD_MAVLINK_RX_PIN, -1);
+  Serial1.onReceiveError([](hardwareSerial_error_t) { ++uart_error_count; });
   Serial.printf("MAVLink RX GPIO %d at %lu baud (receive-only)\n", HUD_MAVLINK_RX_PIN,
                 static_cast<unsigned long>(HUD_MAVLINK_BAUD));
 }
@@ -211,10 +282,14 @@ void loop() {
   }
   if (now - last_report_ms >= 2000U) {
     last_report_ms = now;
-    Serial.printf("mode=%s mavlink_messages=%lu parse_errors=%lu age_ms=%lu heap=%u\n",
-                  demo_enabled ? "demo" : "live", static_cast<unsigned long>(message_count),
+    Serial.printf("mode=%s sysid=%u mavlink_messages=%lu parse_errors=%lu uart_errors=%lu "
+                  "age_ms=%lu heap=%u largest=%u psram_free=%u render_max_us=%lu\n",
+                  demo_enabled ? "demo" : "live", active_system_id,
+                  static_cast<unsigned long>(message_count),
                   static_cast<unsigned long>(parse_error_count),
+                  static_cast<unsigned long>(uart_error_count.load()),
                   last_message_ms == 0U ? 0UL : static_cast<unsigned long>(now - last_message_ms),
-                  ESP.getFreeHeap());
+                  ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                  ESP.getFreePsram(), static_cast<unsigned long>(maximum_render_us));
   }
 }

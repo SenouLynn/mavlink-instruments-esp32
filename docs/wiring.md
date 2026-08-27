@@ -16,7 +16,7 @@ configured here as a USB host, and USB is unnecessary for this telemetry path.
   Mac USB-C  <=================================>  ESP32-S3 USB port
                     flash + serial monitor
 
-  ST7789 DISPLAY                                  ESP32-S3 DEVKITC-1
+  ST7789 DISPLAY                                  ESP32-S3 SUPERMINI
   ┌──────────────┐                                ┌──────────────────────┐
   │ VCC          ├───────────────────────────────►│ 3V3                  │
   │ GND          ├───────────────────────────────►│ GND                  │
@@ -47,20 +47,21 @@ configured here as a USB host, and USB is unnecessary for this telemetry path.
 
 ## ESP32-S3 to ST7789 pin table
 
-This assignment matches the firmware and clusters the signal wires on the `J1` side of an
-official ESP32-S3-DevKitC-1. Espressif's header reference confirms these GPIOs are exposed on
-that board: [ESP32-S3-DevKitC-1 pin layout](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.0.html#header-block).
+This assignment matches the firmware and uses the ESP32-S3 SPI2/FSPI native SCLK, MOSI, and CS
+signals. It is intentionally different from the article's working GPIO13/12 mapping; the GPIO
+matrix permits both, while GPIO12/11/10 provides the native SPI2 route. Match GPIO numbers printed
+on the SuperMini rather than positions copied from a DevKitC diagram.
 
-| ST7789 marking | Meaning | ESP32 label | Official DevKitC-1 header position |
-|---|---|---:|---:|
-| `VCC` | Display logic/panel power | `3V3` | J1 pin 1 or 2 |
-| `GND` | Ground | `G` / `GND` | J1 pin 22 |
-| `SCL`, `SCK`, or `CLK` | SPI clock | `GPIO12` | J1 pin 18 |
-| `SDA`, `MOSI`, or `DIN` | SPI data from ESP32 | `GPIO11` | J1 pin 17 |
-| `CS` | Chip select | `GPIO10` | J1 pin 16 |
-| `DC` or `A0` | Data/command select | `GPIO9` | J1 pin 15 |
-| `RES` or `RST` | Display reset | `GPIO8` | J1 pin 12 |
-| `BL`, `BLK`, or `LED` | Backlight | `3V3`* | J1 pin 1 or 2 |
+| ST7789 marking | Meaning | SuperMini label |
+|---|---|---:|
+| `VCC` | Display logic/panel power | `3V3` |
+| `GND` | Ground | `GND` |
+| `SCL`, `SCK`, or `CLK` | SPI clock | `GPIO12` |
+| `SDA`, `MOSI`, or `DIN` | SPI data from ESP32 | `GPIO11` |
+| `CS` | Chip select | `GPIO10` |
+| `DC` or `A0` | Data/command select | `GPIO9` |
+| `RES` or `RST` | Display reset | `GPIO8` |
+| `BL`, `BLK`, or `LED` | Backlight | `3V3`* |
 
 On these SPI displays, a pin marked `SDA` usually means serial data/MOSI; it is not an I2C bus.
 There is no MISO connection because the firmware does not read pixels from the panel.
@@ -83,8 +84,8 @@ crossed by function: the flight controller transmits and the ESP32 receives.
 | `RTS` | — | Leave disconnected |
 | Telemetry-port `5V` | — | Leave disconnected |
 
-On an official ESP32-S3-DevKitC-1, GPIO18 is J1 pin 11 and is explicitly capable of `U1RXD`.
-The code opens UART1 as RX-only with TX set to `-1`.
+GPIO18 is exposed on the SuperMini header. The ESP32-S3 GPIO matrix can route UART1 RX to it, and
+the code opens UART1 as RX-only with TX set to `-1`.
 
 For a standard six-pin Pixhawk TELEM connector, the conventional assignments are:
 
@@ -157,3 +158,16 @@ The flight controller must proactively emit `ATTITUDE`, `VFR_HUD`, `GLOBAL_POSIT
 
 Do not join two unrelated 5 V supply outputs. The UART requires a shared ground, not a shared
 5 V rail.
+
+## Installed power
+
+USB from the development Mac is not an installed power architecture. For vehicle installation,
+use a regulator/BEC whose input range covers the aircraft supply and whose continuous and transient
+current ratings cover the ESP32-S3, display logic, and backlight together. Connect its regulated
+output to the SuperMini input specified by that board vendor, never directly to `3V3` unless it is
+a regulated 3.3 V rail designed for that connection. Retain the common signal ground with the
+flight controller.
+
+Do not assume a TELEM connector can power the assembly. If its 5 V output is deliberately used,
+verify the exact flight-controller output rating and measure worst-case startup and backlight
+current first. Otherwise leave TELEM 5 V disconnected as shown above.

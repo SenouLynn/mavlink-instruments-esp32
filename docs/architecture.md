@@ -50,9 +50,15 @@ pitch ladder counter-roll, the predicted corridor rolls with the flight path, cy
 segments show climb/descent, the vario and airframe stay screen-fixed, and abnormal stall or
 coordination states are called out.
 
-The firmware tries to allocate a 240x320 RGB565 framebuffer (153,600 bytes). This removes
-flicker. If allocation fails on a low-memory board, it automatically renders directly to the
-panel. Set `HUD_USE_FRAMEBUFFER` to `0` if required.
+The firmware allocates its 240x320 RGB565 framebuffer (153,600 bytes) explicitly in the
+SuperMini's QSPI PSRAM. This removes flicker without consuming most internal RAM. A missing PSRAM
+or failed contiguous allocation is a startup fault shown on the panel and serial monitor; the
+firmware does not silently switch to a materially slower, flickering renderer.
+
+Each full-screen transfer occupies SPI for at least 30.72 ms at 40 MHz. UART interrupts continue
+to receive during that interval, so UART1 uses a 1 KiB ring buffer and reports hardware overflow
+events. The two-second diagnostic line also reports maximum observed render time, internal heap,
+largest free internal block, and free PSRAM.
 
 ## Telemetry precedence and failure behavior
 
@@ -65,3 +71,7 @@ panel. Set `HUD_USE_FRAMEBUFFER` to `0` if required.
 Message groups older than 1.5 seconds are removed from the render snapshot. A stale link shows
 `NO TELEMETRY`; a live link without fresh attitude shows `ATTITUDE STALE`. Missing values use
 safe zero/fallback behavior and never leave the device.
+
+The first autopilot heartbeat or supported HUD message selects the active MAVLink system ID.
+Messages from other systems and heartbeats from non-autopilot components do not keep the link
+alive or replace HUD data.

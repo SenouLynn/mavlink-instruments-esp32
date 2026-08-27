@@ -129,7 +129,9 @@ TrajectoryResolution resolve_trajectory(const TelemetrySample& sample,
   result.heading_track_delta_deg = drift_rad * kRadToDeg;
   result.is_stalled = airspeed < config.stall_speed_m_s;
 
-  const float effective_forward_speed = std::max(0.0F, airspeed - config.stall_speed_m_s);
+  // Stall state is a warning, not a claim that the aircraft stops translating.
+  // Keep the projected distance in physical metres by integrating actual airspeed.
+  const float effective_forward_speed = std::max(0.0F, airspeed);
   const float heading_blend = clamp((airspeed - config.stall_speed_m_s) /
                                         std::max(1.0F, config.stall_speed_m_s),
                                     0.0F, 1.0F);

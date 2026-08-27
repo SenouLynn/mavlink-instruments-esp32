@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -19,10 +20,24 @@ class CountingTarget final : public hud::DrawTarget {
   int circles = 0;
   int texts = 0;
   void clear(hud::Color) override { ++clears; }
-  void line(float, float, float, float, hud::Color, float) override { ++lines; }
-  void triangle(float, float, float, float, float, float, hud::Color, bool) override { ++triangles; }
-  void circle(float, float, float, hud::Color, bool) override { ++circles; }
-  void text(float, float, const char*, hud::Color, float) override { ++texts; }
+  void line(float x1, float y1, float x2, float y2, hud::Color, float) override {
+    assert(std::isfinite(x1) && std::isfinite(y1) && std::isfinite(x2) && std::isfinite(y2));
+    ++lines;
+  }
+  void triangle(float x1, float y1, float x2, float y2, float x3, float y3,
+                hud::Color, bool) override {
+    assert(std::isfinite(x1) && std::isfinite(y1) && std::isfinite(x2) &&
+           std::isfinite(y2) && std::isfinite(x3) && std::isfinite(y3));
+    ++triangles;
+  }
+  void circle(float x, float y, float radius, hud::Color, bool) override {
+    assert(std::isfinite(x) && std::isfinite(y) && std::isfinite(radius));
+    ++circles;
+  }
+  void text(float x, float y, const char*, hud::Color, float size) override {
+    assert(std::isfinite(x) && std::isfinite(y) && std::isfinite(size));
+    ++texts;
+  }
 };
 
 }  // namespace
@@ -57,6 +72,7 @@ int main() {
               0.001F));
   // Explicit zero body rates are trusted: a bank without rotation is a slip.
   assert(near(trajectory.turn_rate_rad_s, 0.0F));
+  assert(near(trajectory.points[trajectory.point_count - 1U].forward_m, 120.0F, 0.01F));
   assert(hud::resolve_coordination(trajectory.turn_rate_rad_s,
                                    trajectory.coordinated_turn_rate_rad_s) ==
          hud::Coordination::kSlipping);
@@ -67,7 +83,7 @@ int main() {
   stalled.vfr_hud = hud::VfrHudSample{0.0F, 11.0F, 30.0F, 0.0F};
   const auto stalled_path = hud::resolve_trajectory(stalled);
   assert(stalled_path.is_stalled);
-  assert(near(stalled_path.points[stalled_path.point_count - 1U].forward_m, 0.0F));
+  assert(near(stalled_path.points[stalled_path.point_count - 1U].forward_m, 55.0F, 0.01F));
 
   CountingTarget target;
   hud::compose_unified_hud(sample, target);
@@ -75,6 +91,11 @@ int main() {
   assert(target.lines > 50);
   assert(target.circles > 0);
   assert(target.texts > 0);
+
+  hud::TelemetrySample non_finite = sample;
+  non_finite.attitude->roll_rad = std::numeric_limits<float>::quiet_NaN();
+  non_finite.attitude->pitch_rad = std::numeric_limits<float>::infinity();
+  hud::compose_unified_hud(non_finite, target);
 
   std::cout << "hud-core tests passed\n";
 }
